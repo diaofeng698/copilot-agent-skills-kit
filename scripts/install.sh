@@ -38,6 +38,14 @@ run() {
   fi
 }
 
+normalize_target_argument() {
+  local path="$1"
+  while [[ "$path" != "/" && "$path" == */ ]]; do
+    path="${path%/}"
+  done
+  printf '%s\n' "$path"
+}
+
 contains_name() {
   local wanted="$1"
   shift
@@ -55,11 +63,18 @@ assert_owned_or_compatible_directory() {
   local name="$4"
   shift 4
   local owned_names=("$@")
+  local expected_digest=""
 
   kit_assert_safe_directory "$target_path"
   [[ -e "$target_path" ]] || return 0
   kit_reject_symlinks "$target_path" "target $kind $name"
-  contains_name "$name" "${owned_names[@]}" && return 0
+  if contains_name "$name" "${owned_names[@]}"; then
+    [[ "$(kit_hash_directory "$target_path")" == "${lock_skill_digest[$name]}" ]] && \
+      return 0
+    [[ "$force_managed" == true ]] || \
+      kit_fail "managed $kind contains local changes: $target_path; rerun with --force-managed only after review"
+    return 0
+  fi
   diff -qr "$source_path" "$target_path" >/dev/null && return 0
   [[ "$force_managed" == true ]] || \
     kit_fail "unowned $kind collides with upstream name '$name': $target_path; rerun with --force-managed only after review"
@@ -75,7 +90,17 @@ assert_owned_or_compatible_file() {
 
   kit_assert_safe_file "$target_path"
   [[ -e "$target_path" ]] || return 0
-  contains_name "$name" "${owned_names[@]}" && return 0
+  if contains_name "$name" "${owned_names[@]}"; then
+    case "$kind" in
+      reference) expected_digest="${lock_reference_digest[$name]}" ;;
+      persona) expected_digest="${lock_persona_digest[$name]}" ;;
+      *) kit_fail "unknown managed file kind: $kind" ;;
+    esac
+    [[ "$(kit_hash_file "$target_path")" == "$expected_digest" ]] && return 0
+    [[ "$force_managed" == true ]] || \
+      kit_fail "managed $kind contains local changes: $target_path; rerun with --force-managed only after review"
+    return 0
+  fi
   cmp -s "$source_path" "$target_path" && return 0
   [[ "$force_managed" == true ]] || \
     kit_fail "unowned $kind collides with upstream name '$name': $target_path; rerun with --force-managed only after review"
@@ -111,11 +136,12 @@ while (($# > 0)); do
 done
 
 [[ -n "$target" ]] || kit_fail '--target is required'
+target="$(normalize_target_argument "$target")"
 [[ -d "$target" && ! -L "$target" ]] || \
   kit_fail "target must be an existing real directory: $target"
 target="$(cd -- "$target" && pwd -P)"
 
-kit_require_commands git rsync find diff cmp
+kit_require_commands git rsync find diff cmp sha256sum sort awk stat cat
 kit_assert_upstream_integrity "$project_root" "$upstream"
 
 [[ -d "$upstream/skills" ]] || kit_fail "upstream skills directory not found: $upstream/skills"
@@ -130,7 +156,7 @@ readonly references_target="$target/.agents/references"
 readonly personas_target="$target/.github/agents"
 readonly instructions_target="$target/.github/copilot-instructions.md"
 readonly lock_file="$target/.agent-skills-kit.lock"
-readonly upstream_url="$(git -C "$upstream" remote get-url origin)"
+readonly upstream_url="$(kit_configured_upstream_url "$project_root")"
 
 skill_names=()
 for skill_dir in "$upstream"/skills/*; do
@@ -169,6 +195,7 @@ old_references=()
 old_personas=()
 if [[ -e "$lock_file" || -L "$lock_file" ]]; then
   kit_load_lock "$lock_file" "$upstream_url"
+  kit_validate_lock_manifest "$upstream"
   old_skills=("${lock_skills[@]}")
   old_references=("${lock_references[@]}")
   old_personas=("${lock_personas[@]}")
@@ -195,75 +222,169 @@ for name in "${reference_names[@]}"; do
 done
 for name in "${persona_names[@]}"; do
   assert_owned_or_compatible_file \
-    "$upstream/agents/$name.md" "$personas_target/$name.agent.md" Persona "$name" \
+    "$upstream/agents/$name.md" "$personas_target/$name.agent.md" persona "$name" \
     "${old_personas[@]}"
 done
 for name in "${old_skills[@]}"; do
   kit_assert_safe_directory "$skills_target/$name"
   kit_reject_symlinks "$skills_target/$name" "previously managed Skill $name"
+  if [[ -e "$skills_target/$name" && \
+    "$(kit_hash_directory "$skills_target/$name")" != "${lock_skill_digest[$name]}" && \
+    "$force_managed" != true ]]; then
+    kit_fail "managed Skill contains local changes: $skills_target/$name; rerun with --force-managed only after review"
+  fi
 done
 for name in "${old_references[@]}"; do
   kit_assert_safe_file "$references_target/$name"
+  if [[ -e "$references_target/$name" && \
+    "$(kit_hash_file "$references_target/$name")" != "${lock_reference_digest[$name]}" && \
+    "$force_managed" != true ]]; then
+    kit_fail "managed reference contains local changes: $references_target/$name; rerun with --force-managed only after review"
+  fi
 done
 for name in "${old_personas[@]}"; do
   kit_assert_safe_file "$personas_target/$name.agent.md"
+  if [[ -e "$personas_target/$name.agent.md" && \
+    "$(kit_hash_file "$personas_target/$name.agent.md")" != "${lock_persona_digest[$name]}" && \
+    "$force_managed" != true ]]; then
+    kit_fail "managed Persona contains local changes: $personas_target/$name.agent.md; rerun with --force-managed only after review"
+  fi
 done
 
-run mkdir -p "$skills_target" "$references_target" "$personas_target"
+if [[ "$dry_run" == true ]]; then
+  run mkdir -p "$skills_target" "$references_target" "$personas_target"
+  for name in "${skill_names[@]}"; do
+    run rsync -a --checksum --delete "$upstream/skills/$name/" "$skills_target/$name/"
+  done
+  for name in "${reference_names[@]}"; do
+    run cp "$upstream/references/$name" "$references_target/$name"
+  done
+  for name in "${persona_names[@]}"; do
+    run cp "$upstream/agents/$name.md" "$personas_target/$name.agent.md"
+  done
+  printf 'Previewed install for %s skills, %s references, and %s personas in %s.\n' \
+    "${#skill_names[@]}" "${#reference_names[@]}" "${#persona_names[@]}" "$target"
+  exit 0
+fi
 
+stage_root="$(mktemp -d "$target/.agent-skills-kit.stage.XXXXXX")"
+backup_root="$(mktemp -d "$target/.agent-skills-kit.backup.XXXXXX")"
+transaction_started=false
+had_agents=false
+had_github=false
+had_lock=false
+[[ ! -e "$target/.agents" ]] || had_agents=true
+[[ ! -e "$target/.github" ]] || had_github=true
+[[ ! -e "$lock_file" ]] || had_lock=true
+rollback_install() {
+  local status="${1:-$?}"
+  trap - EXIT ERR INT TERM HUP
+  if [[ "$transaction_started" == true ]]; then
+    if [[ -e "$backup_root/.agents" ]]; then
+      rm -rf -- "$target/.agents"
+      mv "$backup_root/.agents" "$target/.agents"
+    elif [[ "$had_agents" == false && -e "$target/.agents" ]]; then
+      rm -rf -- "$target/.agents"
+    fi
+    if [[ -e "$backup_root/.github" ]]; then
+      rm -rf -- "$target/.github"
+      mv "$backup_root/.github" "$target/.github"
+    elif [[ "$had_github" == false && -e "$target/.github" ]]; then
+      rm -rf -- "$target/.github"
+    fi
+    if [[ -e "$backup_root/.agent-skills-kit.lock" ]]; then
+      rm -f -- "$lock_file"
+      mv "$backup_root/.agent-skills-kit.lock" "$lock_file"
+    elif [[ "$had_lock" == false && -e "$lock_file" ]]; then
+      rm -f -- "$lock_file"
+    fi
+  fi
+  rm -rf -- "$stage_root" "$backup_root"
+  exit "$status"
+}
+trap 'rollback_install $?' EXIT ERR
+trap 'rollback_install 130' INT
+trap 'rollback_install 143' TERM
+trap 'rollback_install 129' HUP
+
+if [[ -e "$target/.agents" ]]; then
+  cp -a "$target/.agents" "$stage_root/.agents"
+fi
+if [[ -e "$target/.github" ]]; then
+  cp -a "$target/.github" "$stage_root/.github"
+fi
+mkdir -p "$stage_root/.agents/skills" "$stage_root/.agents/references" \
+  "$stage_root/.github/agents"
 for name in "${skill_names[@]}"; do
-  run mkdir -p "$skills_target/$name"
-  run rsync -a --delete "$upstream/skills/$name/" "$skills_target/$name/"
+  mkdir -p "$stage_root/.agents/skills/$name"
+  rsync -a --checksum --delete \
+    "$upstream/skills/$name/" "$stage_root/.agents/skills/$name/"
 done
 for name in "${reference_names[@]}"; do
-  run cp "$upstream/references/$name" "$references_target/$name"
+  cp "$upstream/references/$name" "$stage_root/.agents/references/$name"
 done
 for name in "${persona_names[@]}"; do
-  run cp "$upstream/agents/$name.md" "$personas_target/$name.agent.md"
+  cp "$upstream/agents/$name.md" "$stage_root/.github/agents/$name.agent.md"
 done
 
 for name in "${old_skills[@]}"; do
   if [[ ! -d "$upstream/skills/$name" ]]; then
-    run rm -rf -- "$skills_target/$name"
+    rm -rf -- "$stage_root/.agents/skills/$name"
   fi
 done
 for name in "${old_references[@]}"; do
   if [[ ! -f "$upstream/references/$name" ]]; then
-    run rm -f -- "$references_target/$name"
+    rm -f -- "$stage_root/.agents/references/$name"
   fi
 done
 for name in "${old_personas[@]}"; do
   if [[ ! -f "$upstream/agents/$name.md" ]]; then
-    run rm -f -- "$personas_target/$name.agent.md"
+    rm -f -- "$stage_root/.github/agents/$name.agent.md"
   fi
 done
 
-if [[ ! -e "$instructions_target" || "$force_instructions" == true ]]; then
-  run mkdir -p "$(dirname -- "$instructions_target")"
-  run cp "$template" "$instructions_target"
-else
+if [[ -e "$instructions_target" && "$force_instructions" != true ]]; then
+  cp "$instructions_target" "$stage_root/.github/copilot-instructions.md"
   printf 'Preserved existing Copilot instructions: %s\n' "$instructions_target"
+else
+  cp "$template" "$stage_root/.github/copilot-instructions.md"
 fi
 
-if [[ "$dry_run" == false ]]; then
-  lock_tmp="$(mktemp "$target/.agent-skills-kit.lock.tmp.XXXXXX")"
-  trap 'rm -f -- "${lock_tmp:-}"' EXIT
-  {
-    printf 'format=1\n'
-    printf 'upstream_url=%s\n' "$upstream_url"
-    printf 'upstream_commit=%s\n' "$(git -C "$upstream" rev-parse HEAD)"
-    printf 'upstream_version=%s\n' "$(git -C "$upstream" describe --tags --always)"
-    printf '%s\n' "${skill_names[@]/#/skill=}"
-    printf '%s\n' "${reference_names[@]/#/reference=}"
-    printf '%s\n' "${persona_names[@]/#/persona=}"
-  } > "$lock_tmp"
-  mv "$lock_tmp" "$lock_file"
-  trap - EXIT
-fi
+{
+  printf 'format=2\n'
+  printf 'upstream_url=%s\n' "$upstream_url"
+  printf 'upstream_commit=%s\n' "$(GIT_NO_REPLACE_OBJECTS=1 git -C "$upstream" rev-parse HEAD)"
+  printf 'upstream_version=%s\n' "$(GIT_NO_REPLACE_OBJECTS=1 git -C "$upstream" describe --tags --always)"
+  for name in "${skill_names[@]}"; do
+    printf 'skill=%s|%s\n' "$name" "$(kit_hash_directory "$stage_root/.agents/skills/$name")"
+  done
+  for name in "${reference_names[@]}"; do
+    printf 'reference=%s|%s\n' "$name" \
+      "$(kit_hash_file "$stage_root/.agents/references/$name")"
+  done
+  for name in "${persona_names[@]}"; do
+    printf 'persona=%s|%s\n' "$name" \
+      "$(kit_hash_file "$stage_root/.github/agents/$name.agent.md")"
+  done
+} > "$stage_root/.agent-skills-kit.lock"
 
-printf '%s install for %s skills, %s references, and %s personas in %s.\n' \
-  "$([[ "$dry_run" == true ]] && printf 'Previewed' || printf 'Completed')" \
+transaction_started=true
+if [[ -e "$target/.agents" ]]; then
+  mv "$target/.agents" "$backup_root/.agents"
+fi
+if [[ -e "$target/.github" ]]; then
+  mv "$target/.github" "$backup_root/.github"
+fi
+if [[ -e "$lock_file" ]]; then
+  mv "$lock_file" "$backup_root/.agent-skills-kit.lock"
+fi
+mv "$stage_root/.agents" "$target/.agents"
+mv "$stage_root/.github" "$target/.github"
+mv "$stage_root/.agent-skills-kit.lock" "$lock_file"
+transaction_started=false
+rm -rf -- "$stage_root" "$backup_root"
+trap - EXIT ERR INT TERM HUP
+
+printf 'Completed install for %s skills, %s references, and %s personas in %s.\n' \
   "${#skill_names[@]}" "${#reference_names[@]}" "${#persona_names[@]}" "$target"
-if [[ "$dry_run" == false ]]; then
-  printf 'Reload the VS Code window and start a new Copilot Chat session.\n'
-fi
+printf 'Reload the VS Code window and start a new Copilot Chat session.\n'

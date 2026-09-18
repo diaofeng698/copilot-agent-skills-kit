@@ -48,12 +48,17 @@ while (($# > 0)); do
   esac
 done
 
-kit_require_commands git find
+kit_require_commands git find sort sed
 if ! git -C "$upstream" rev-parse --git-dir >/dev/null 2>&1; then
   printf 'Initializing the agent-skills submodule...\n'
   git -C "$project_root" submodule update --init --recursive
 fi
 kit_assert_upstream_integrity "$project_root" "$upstream"
+
+configured_url="$(kit_configured_upstream_url "$project_root")"
+actual_url="$(git -C "$upstream" config --get remote.origin.url)"
+[[ "$actual_url" == "$configured_url" ]] || \
+  kit_fail "agent-skills origin does not match .gitmodules: $actual_url"
 
 printf 'Fetching agent-skills tags...\n'
 git -C "$upstream" fetch --prune --tags origin
@@ -64,15 +69,35 @@ if [[ -z "$requested_ref" ]]; then
       requested_ref="$candidate"
       break
     fi
-  done < <(git -C "$upstream" tag -l --sort=-v:refname)
+  done < <(
+    git -C "$upstream" ls-remote --tags --refs origin 'refs/tags/*' | \
+      sed 's#^[^[:space:]]*[[:space:]]refs/tags/##' | \
+      sort -Vr
+  )
   [[ -n "$requested_ref" ]] || kit_fail 'no stable X.Y.Z release tags found upstream'
 fi
 
-desired_commit="$(git -C "$upstream" rev-parse --verify "$requested_ref^{commit}" 2>/dev/null)" || \
+if [[ "$requested_ref" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  remote_ref="$(
+    git -C "$upstream" ls-remote --tags --refs origin "refs/tags/$requested_ref" | \
+      awk 'NR == 1 { print $2 }'
+  )"
+  [[ "$remote_ref" == "refs/tags/$requested_ref" ]] || \
+    kit_fail "release tag is not advertised by origin: $requested_ref"
+fi
+
+desired_commit="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$upstream" rev-parse --verify "$requested_ref^{commit}" 2>/dev/null)" || \
   kit_fail "upstream ref does not exist: $requested_ref"
-current_commit="$(git -C "$upstream" rev-parse HEAD)"
-current_name="$(git -C "$upstream" describe --tags --always)"
-desired_name="$(git -C "$upstream" describe --tags --always "$desired_commit")"
+remote_contains="$(
+  GIT_NO_REPLACE_OBJECTS=1 git -C "$upstream" for-each-ref \
+    --format='%(refname)' --contains "$desired_commit" refs/remotes/origin/ | \
+    head -n 1
+)"
+[[ -n "$remote_contains" ]] || \
+  kit_fail "upstream ref is not reachable from an origin branch: $requested_ref"
+current_commit="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$upstream" rev-parse HEAD)"
+current_name="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$upstream" describe --tags --always)"
+desired_name="$(GIT_NO_REPLACE_OBJECTS=1 git -C "$upstream" describe --tags --always "$desired_commit")"
 
 printf 'Current: %s (%s)\n' "$current_name" "${current_commit:0:12}"
 printf 'Target:  %s (%s)\n' "$desired_name" "${desired_commit:0:12}"
@@ -96,19 +121,28 @@ if [[ "$current_commit" == "$desired_commit" ]]; then
 fi
 
 rollback() {
-  git -C "$project_root" restore --staged --source=HEAD -- vendor/agent-skills \
+  git -C "$project_root" reset -q HEAD -- vendor/agent-skills \
     >/dev/null 2>&1 || true
   git -C "$upstream" checkout --detach "$current_commit" >/dev/null 2>&1 || true
 }
-trap rollback ERR INT TERM
+rollback_and_exit() {
+  local status="$1"
+  trap - ERR INT TERM HUP
+  rollback
+  exit "$status"
+}
+trap 'rollback_and_exit $?' ERR
+trap 'rollback_and_exit 130' INT
+trap 'rollback_and_exit 143' TERM
+trap 'rollback_and_exit 129' HUP
 
 git -C "$upstream" checkout --detach "$desired_commit"
 git -C "$project_root" add vendor/agent-skills
-"$project_root/scripts/verify.sh"
-trap - ERR INT TERM
+"$project_root/scripts/verify.sh" --staged
+trap - ERR INT TERM HUP
 
 printf '\nUpdated and staged the submodule Git link. Review before committing:\n'
 printf '  git diff --cached --submodule=log -- vendor/agent-skills\n'
 printf '  ./tests/run.sh\n'
-printf '  ./scripts/verify.sh\n'
-printf '  git commit -m "chore: update agent-skills to %s"\n' "$desired_name"
+printf '  ./scripts/verify.sh --staged\n'
+printf '  git commit -m %q\n' "chore: update agent-skills to $desired_name"

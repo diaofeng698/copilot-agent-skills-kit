@@ -8,7 +8,7 @@ The repository owns the Chinese setup guide, installation/update/verification sc
 
 ## Assumptions
 
-1. The maintenance repository is `/data_ws/Project/fdiao/copilot-agent-skills-kit`.
+1. The maintenance repository is standalone and can be cloned to any writable path.
 2. The default branch is `main`; no remote is configured until the user chooses a hosting URL.
 3. Linux Bash, Git, and `rsync` are available on target machines.
 4. A stable, reviewed upstream revision is preferred over silently following the moving `main` branch.
@@ -17,7 +17,7 @@ The repository owns the Chinese setup guide, installation/update/verification sc
 ## Tech Stack
 
 - Git and Git submodules
-- Bash 4+
+- Bash 4.2+
 - Standard Unix tools plus `rsync`
 - Markdown documentation
 - No npm, Python, package manager, or production dependency
@@ -81,6 +81,8 @@ readonly project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 - Integration tests create temporary target projects and call the real installer.
 - Tests verify Skill, Persona, reference, lock, and instructions behavior.
 - Tests prove existing instructions and unrelated local Skills are preserved.
+- Tests prove locally modified managed content is rejected unless explicitly forced.
+- Tests prove failed installations restore the prior target state.
 - Tests prove dry-run mode does not modify the target.
 - Verification checks submodule state, required upstream assets, shell syntax, and documentation.
 
@@ -90,6 +92,7 @@ readonly project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 - Pin the upstream repository through a Git submodule commit.
 - Preserve unrelated target-project Skills and existing Copilot instructions.
+- Record content digests for managed entries and stage changes before replacement.
 - Verify scripts before committing an update.
 - Keep third-party licensing and history inside the submodule.
 
@@ -112,6 +115,7 @@ readonly project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 - A fresh clone with `--recurse-submodules` can install all upstream Skills, references, and four Personas into an arbitrary project.
 - Installation is idempotent and preserves unrelated local Skills.
+- Interrupted or failed installation does not leave a partial managed configuration.
 - Existing project Copilot instructions are never overwritten by default.
 - Upstream updates are explicit, reviewable Git-link changes.
 - Automated tests and verification pass.

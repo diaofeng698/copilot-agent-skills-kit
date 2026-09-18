@@ -15,38 +15,38 @@ Build a dedicated Git repository around a pinned `agent-skills` submodule. Add t
 
 ### Phase 1: Repository foundation
 
-- [ ] Initialize Git on `main` and commit the approved spec and plan.
-- [ ] Add `addyosmani/agent-skills` as `vendor/agent-skills` submodule pinned to release `0.6.10`.
+- [x] Initialize Git on `main` and commit the approved spec and plan.
+- [x] Add `addyosmani/agent-skills` as `vendor/agent-skills` submodule pinned to release `0.6.10`.
 
 ### Checkpoint: Foundation
 
-- [ ] `git submodule status` reports the expected commit.
-- [ ] The superproject working tree is clean after commits.
+- [x] `git submodule status` reports the expected commit.
+- [x] The superproject working tree is clean after commits.
 
 ### Phase 2: Installer behavior
 
-- [ ] Write failing integration tests for install, preservation, and dry-run behavior.
-- [ ] Implement `scripts/install.sh` until the tests pass.
-- [ ] Add the Copilot instructions template.
+- [x] Write failing integration tests for install, preservation, and dry-run behavior.
+- [x] Implement `scripts/install.sh` until the tests pass.
+- [x] Add the Copilot instructions template.
 
 ### Checkpoint: Installer
 
-- [ ] `tests/run.sh` passes.
-- [ ] Re-running installation is idempotent.
+- [x] `tests/run.sh` passes.
+- [x] Re-running installation is idempotent.
 
 ### Phase 3: Maintenance and documentation
 
-- [ ] Implement explicit upstream-update and repository-verification scripts.
-- [ ] Copy the Chinese guide into `docs/` and adapt it to the kit workflow.
-- [ ] Add README quick start, maintenance, rollback, and publishing instructions.
-- [ ] Add shell-safe editor settings and repository instructions.
+- [x] Implement explicit upstream-update and repository-verification scripts.
+- [x] Copy the Chinese guide into `docs/` and adapt it to the kit workflow.
+- [x] Add README quick start, maintenance, rollback, and publishing instructions.
+- [x] Add shell-safe editor settings and repository instructions.
 
 ### Checkpoint: Complete
 
-- [ ] All shell scripts pass `bash -n`.
-- [ ] Integration tests pass.
-- [ ] Repository verification passes.
-- [ ] Git history is split into reviewable commits.
+- [x] All shell scripts pass `bash -n`.
+- [x] Integration tests pass.
+- [x] Repository verification passes.
+- [x] Git history is split into reviewable commits.
 
 ## Risks and Mitigations
 
