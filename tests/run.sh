@@ -84,4 +84,8 @@ if "$installer" --target "$missing_target" >/dev/null 2>&1; then
 fi
 [[ ! -e "$missing_target" ]] || fail 'installer created an invalid target'
 
+printf 'TEST: maintenance commands are available and repository verifies\n'
+"$project_root/scripts/update-upstream.sh" --help >/dev/null
+"$project_root/scripts/verify.sh" >/dev/null
+
 printf 'PASS: all installer integration tests\n'
