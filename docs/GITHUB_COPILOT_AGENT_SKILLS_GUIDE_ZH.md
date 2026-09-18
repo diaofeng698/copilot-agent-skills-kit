@@ -167,6 +167,10 @@ git rev-parse --show-toplevel
 
 ### 4.1 安装前审阅
 
+> 本节是 Skills CLI 的手动替代方案，仅适用于 `node`、`npm` 和 `npx` 来自同一套
+> 完整 Node.js 安装的环境。如果三者来源不同，或 `npx` 自身无法启动，请返回
+> 第 0 节，使用不依赖 npm/npx 的维护仓库安装器。
+
 第三方 Skill 可能包含脚本或工具调用。先查看可用技能：
 
 ```bash
@@ -768,13 +772,16 @@ readlink -f "$(command -v npx)"
 Node.js 工具链，不要只替换 `node` 二进制。维护仓库的安装、更新和验证脚本不依赖
 `npm/npx`，因此可以在修复 npm 期间继续使用。
 
-临时检查可执行：
+在 Debian/Ubuntu 上，如果系统 npm 的依赖确实位于 `/usr/share/nodejs`，可以仅对
+当前命令临时补充模块搜索路径进行诊断：
 
 ```bash
-npx --yes -p node@22 -p skills -c 'node --version && skills add --help'
+NODE_PATH=/usr/share/nodejs \
+  npx --yes skills add addyosmani/agent-skills --list
 ```
 
-长期使用应修正默认 Node.js，而不是每次依赖临时运行时。
+这不是永久修复：它仍然混用了两个发行来源。长期使用应安装一套同时包含
+`node`、`npm` 和 `npx` 的完整 Node.js 工具链，或者直接使用维护仓库脚本。
 
 ### 12.5 更新上游时报告本地修改
 
