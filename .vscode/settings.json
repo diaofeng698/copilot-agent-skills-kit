@@ -1,0 +1,9 @@
+{
+  "files.associations": {
+    "scripts/*": "shellscript",
+    "tests/*.sh": "shellscript"
+  },
+  "[shellscript]": {
+    "editor.formatOnSave": false
+  }
+}

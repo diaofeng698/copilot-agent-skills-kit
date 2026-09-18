@@ -1,0 +1,11 @@
+# OS/editor temporary files
+.DS_Store
+*.swp
+*.tmp
+
+# Local test output
+.tmp/
+
+# Local environment files
+.env
+.env.*
